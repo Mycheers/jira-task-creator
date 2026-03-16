@@ -207,7 +207,7 @@ def create_issue(summary, description=None, project_key=None, issue_type_name=No
             issue_data["fields"]["duedate"] = due_date.strftime("%Y-%m-%dT%H:%M:%S.000+08:00")
 
     # 发送请求
-    url = f"{base_url.rstrip('/')}/rest/api/3/issue"
+    url = f"{base_url.rstrip('/')}/rest/api/latest/issue"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
@@ -248,3 +248,447 @@ def search_user(query, project_key=None):
 
     searcher = UserSearcher(base_url, token)
     return searcher.search_user(query, project_key)
+
+
+def search_issues(jql_query, fields=None, max_results=50):
+    """搜索 Jira Issues"""
+    base_url = os.getenv("JIRA_BASE_URL")
+    token = os.getenv("JIRA_BEARER_TOKEN")
+
+    if not base_url or not token:
+        return {
+            "success": False,
+            "error": "JIRA_BASE_URL and JIRA_BEARER_TOKEN environment variables required"
+        }
+
+    url = f"{base_url.rstrip('/')}/rest/api/latest/search"
+
+    # 构建查询参数
+    params = {
+        "jql": jql_query,
+        "fields": fields if fields else ["key", "summary", "status", "assignee", "created", "updated"],
+        "maxResults": max_results
+    }
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        print(f"[INFO] Status code: {response.status_code}")
+
+        if response.status_code == 200:
+            result = response.json()
+            return {
+                "success": True,
+                "total": result.get("total", 0),
+                "issues": result.get("issues", [])
+            }
+        else:
+            return {
+                "success": False,
+                "error": f"HTTP {response.status_code}",
+                "details": response.text
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def get_issue_transitions(issue_key):
+    """获取 Issue 的可用状态转换"""
+    base_url = os.getenv("JIRA_BASE_URL")
+    token = os.getenv("JIRA_BEARER_TOKEN")
+
+    if not base_url or not token:
+        return {
+            "success": False,
+            "error": "JIRA_BASE_URL and JIRA_BEARER_TOKEN environment variables required"
+        }
+
+    url = f"{base_url.rstrip('/')}/rest/api/latest/issue/{issue_key}/transitions"
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        print(f"[INFO] Transitions Status code: {response.status_code}")
+
+        if response.status_code == 200:
+            result = response.json()
+            return {
+                "success": True,
+                "transitions": result.get("transitions", [])
+            }
+        else:
+            return {
+                "success": False,
+                "error": f"HTTP {response.status_code}",
+                "details": response.text
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def transition_issue(issue_key, transition_id):
+    """执行 Issue 状态转换"""
+    base_url = os.getenv("JIRA_BASE_URL")
+    token = os.getenv("JIRA_BEARER_TOKEN")
+
+    if not base_url or not token:
+        return {
+            "success": False,
+            "error": "JIRA_BASE_URL and JIRA_BEARER_TOKEN environment variables required"
+        }
+
+    url = f"{base_url.rstrip('/')}/rest/api/latest/issue/{issue_key}/transitions"
+
+    # 构建转换数据
+    transition_data = {
+        "transition": {
+            "id": transition_id
+        }
+    }
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=transition_data, timeout=30)
+        print(f"[INFO] Transition Status code: {response.status_code}")
+
+        if response.status_code in [200, 204]:
+            return {
+                "success": True,
+                "issue_key": issue_key
+            }
+        else:
+            return {
+                "success": False,
+                "error": f"HTTP {response.status_code}",
+                "details": response.text
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def update_issue_status(issue_key, target_status):
+    """更新 Issue 状态（便捷函数）
+
+    这是高层封装函数，自动查找并执行状态转换。
+
+    Args:
+        issue_key: Issue Key（如 ERP-123）
+        target_status: 目标状态名称（如 "处理中"）
+
+    Returns:
+        dict: 包含 success, error, transition_name 等信息
+    """
+    # 获取可用的状态转换
+    transitions_result = get_issue_transitions(issue_key)
+
+    if not transitions_result["success"]:
+        return {
+            "success": False,
+            "error": transitions_result["error"],
+            "issue_key": issue_key
+        }
+
+    transitions = transitions_result["transitions"]
+
+    # 查找目标状态的转换
+    target_transition = None
+    for transition in transitions:
+        if transition.get("to", {}).get("name") == target_status:
+            target_transition = transition
+            print(f"[INFO] 找到转换: {transition['name']} -> {transition['to']['name']}")
+            break
+
+    if not target_transition:
+        return {
+            "success": False,
+            "error": f"未找到状态 '{target_status}' 的转换",
+            "issue_key": issue_key,
+            "available_transitions": [t["to"]["name"] for t in transitions]
+        }
+
+    # 执行状态转换
+    transition_result = transition_issue(issue_key, target_transition["id"])
+
+    return {
+        "success": transition_result["success"],
+        "error": transition_result.get("error"),
+        "issue_key": issue_key,
+        "transition_name": target_transition["name"],
+        "from_status": transitions[0]["from"]["name"] if transitions else "未知",
+        "to_status": target_status
+    }
+
+
+def bulk_transition_issues(issue_keys, target_status):
+    """批量更新多个 Issue 状态"""
+    results = []
+
+    for issue_key in issue_keys:
+        result = update_issue_status(issue_key, target_status)
+        results.append({
+            "issue_key": issue_key,
+            "result": result
+        })
+
+    return results
+
+
+def get_my_issues(status_filter=None, project_key=None, max_results=50):
+    """获取我的 Issue 列表（便捷函数）
+
+    Args:
+        status_filter: 状态过滤（None=全部, "Done"=已完成）
+        project_key: 项目 Key（None=默认项目）
+        max_results: 最大返回数量
+
+    Returns:
+        dict: 包含 success, total, issues 等信息
+    """
+    # 构建 JQL 查询
+    jql_parts = []
+
+    if status_filter:
+        jql_parts.append(f"status = '{status_filter}'")
+
+    if project_key:
+        jql_parts.append(f"project = '{project_key}'")
+
+    # 添加 assignee 过滤（获取当前用户的任务）
+    jql_parts.append("assignee = currentUser()")
+
+    jql_query = " AND ".join(jql_parts)
+
+    # 搜索
+    return search_issues(jql_query, max_results=max_results)
+
+
+def update_issue_fields(issue_key, **fields):
+    """更新 Issue 字段（通用函数）
+
+    支持更新多个字段，包括：
+    - summary: 摘要
+    - description: 描述
+    - priority: 优先级
+    - assignee: 责任人
+    - reporter: 报告人
+    - duedate: 到期时间
+    - timetracking: 已工作时长（timetracking.remainingEstimate, timetracking.timeSpent）
+    - customfield_xxx: 自定义字段
+
+    Args:
+        issue_key: Issue Key（如 ERP-123）
+        **fields: 要更新的字段（关键字参数）
+
+    Returns:
+        dict: 包含 success, error, updated_fields 等信息
+    """
+    base_url = os.getenv("JIRA_BASE_URL")
+    token = os.getenv("JIRA_BEARER_TOKEN")
+
+    if not base_url or not token:
+        return {
+            "success": False,
+            "error": "JIRA_BASE_URL and JIRA_BEARER_TOKEN environment variables required"
+        }
+
+    url = f"{base_url.rstrip('/')}/rest/api/latest/issue/{issue_key}"
+
+    # 构建更新数据
+    update_data = {"fields": {}}
+
+    # 处理每个字段
+    for field_name, field_value in fields.items():
+        if field_value is None:
+            continue
+
+        # 字段映射
+        if field_name == "summary":
+            update_data["fields"]["summary"] = field_value
+
+        elif field_name == "description":
+            update_data["fields"]["description"] = field_value
+
+        elif field_name == "priority":
+            parser = NaturalLanguageParser()
+            priority = parser.parse_priority(field_value)
+            update_data["fields"]["priority"] = {"name": priority}
+
+        elif field_name == "assignee":
+            # 支持用户名、邮箱、open_id
+            assignee_search = UserSearcher(base_url, token)
+            assignee = assignee_search.search_user(field_value)
+            if assignee:
+                update_data["fields"]["assignee"] = {
+                    "name": assignee.get("name"),
+                    "accountId": assignee.get("accountId")
+                }
+            else:
+                # 如果找不到用户，直接使用提供的值
+                update_data["fields"]["assignee"] = {"name": field_value}
+
+        elif field_name == "reporter":
+            reporter_search = UserSearcher(base_url, token)
+            reporter = reporter_search.search_user(field_value)
+            if reporter:
+                update_data["fields"]["reporter"] = {
+                    "name": reporter.get("name"),
+                    "accountId": reporter.get("accountId")
+                }
+            else:
+                update_data["fields"]["reporter"] = {"name": field_value}
+
+        elif field_name == "duedate":
+            parser = NaturalLanguageParser()
+            due_date = parser.parse_date(field_value)
+            if due_date:
+                update_data["fields"]["duedate"] = due_date.strftime("%Y-%m-%dT%H:%M:%S.000+08:00")
+            else:
+                update_data["fields"]["duedate"] = field_value
+
+        elif field_name == "timetracking":
+            # timetracking 是一个复杂对象
+            timetracking_value = {}
+            if isinstance(field_value, dict):
+                if "remainingEstimate" in field_value:
+                    timetracking_value["remainingEstimate"] = field_value["remainingEstimate"]
+                if "timeSpent" in field_value:
+                    timetracking_value["timeSpent"] = field_value["timeSpent"]
+            else:
+                timetracking_value["timeSpent"] = field_value
+
+            if timetracking_value:
+                update_data["fields"]["timetracking"] = timetracking_value
+
+        elif field_name.startswith("customfield_"):
+            # 自定义字段，直接使用
+            update_data["fields"][field_name] = field_value
+
+        else:
+            # 其他字段，直接使用
+            update_data["fields"][field_name] = field_value
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        response = requests.put(url, headers=headers, json=update_data, timeout=30)
+        print(f"[INFO] Update Status code: {response.status_code}")
+
+        if response.status_code in [200, 204]:
+            return {
+                "success": True,
+                "issue_key": issue_key,
+                "updated_fields": list(fields.keys()),
+                "update_data": update_data
+            }
+        else:
+            return {
+                "success": False,
+                "error": f"HTTP {response.status_code}",
+                "details": response.text
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def bulk_update_issue_fields(issue_keys, **fields):
+    """批量更新多个 Issue 的字段
+
+    Args:
+        issue_keys: Issue Key 列表
+        **fields: 要更新的字段（关键字参数）
+
+    Returns:
+        list: 每个任务的更新结果
+    """
+    results = []
+
+    for issue_key in issue_keys:
+        result = update_issue_fields(issue_key, **fields)
+        results.append({
+            "issue_key": issue_key,
+            "result": result
+        })
+
+    return results
+
+
+def get_issue_details(issue_key, fields=None):
+    """获取 Issue 详细信息
+
+    Args:
+        issue_key: Issue Key（如 ERP-123）
+        fields: 要返回的字段列表（None=返回所有字段）
+
+    Returns:
+        dict: 包含 success, issue_data 等信息
+    """
+    base_url = os.getenv("JIRA_BASE_URL")
+    token = os.getenv("JIRA_BEARER_TOKEN")
+
+    if not base_url or not token:
+        return {
+            "success": False,
+            "error": "JIRA_BASE_URL and JIRA_BEARER_TOKEN environment variables required"
+        }
+
+    url = f"{base_url.rstrip('/')}/rest/api/latest/issue/{issue_key}"
+
+    # 构建参数
+    params = {}
+    if fields:
+        params["fields"] = ",".join(fields)
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        print(f"[INFO] Get Details Status code: {response.status_code}")
+
+        if response.status_code == 200:
+            result = response.json()
+            return {
+                "success": True,
+                "issue_key": issue_key,
+                "issue_data": result
+            }
+        else:
+            return {
+                "success": False,
+                "error": f"HTTP {response.status_code}",
+                "details": response.text
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }

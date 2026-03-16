@@ -1,6 +1,10 @@
 # Jira Task Creator - Professional Edition
 
-A complete Jira task management skill with natural language parsing, smart user search, batch operations, and intelligent analytics.
+A complete Jira task management skill with natural language parsing, smart user search, task creation, status updates, and batch operations.
+
+**版本**: 2.0.0
+**作者**: 皮皮虾
+**许可**: MIT License
 
 ## Core Features
 
@@ -15,7 +19,13 @@ A complete Jira task management skill with natural language parsing, smart user 
 - **User cache mechanism**: 5-minute TTL, reduces API calls
 - **User mapping management**: Maintains Feishu-Jira user mapping
 
-### 3. Batch Task Creation
+### 3. Task Status Management ⭐ New in v2.0.0
+- **Status transitions**: Get available status transitions for issues
+- **Status update**: Update issue status using Transitions API
+- **Batch status updates**: Update multiple issues at once
+- **My issues list**: Get current user's task list
+
+### 4. Batch Task Creation
 - **CSV import**: Bulk task creation from CSV files
 - **Task templates**: Bug report, feature request, technical research
 - **Variable replacement**: Dynamic template content filling
